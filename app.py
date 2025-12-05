@@ -18,7 +18,7 @@ class TokenManager:
     def __init__(self):
         self.active_gate_tokens = {}  # {token: expire_time}
 
-    def create_token(self, lifespan_seconds=15):
+    def create_token(self, lifespan_seconds=20):
         # Eski tokenları temizle
         now = time.time()
         self.active_gate_tokens = {k: v for k, v in self.active_gate_tokens.items() if v > now}
