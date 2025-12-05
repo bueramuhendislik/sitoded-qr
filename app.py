@@ -10,6 +10,35 @@ import uuid
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="SİTODED QR Sistemi", page_icon="📝", layout="centered")
 
+# --- ORTAK HAFIZA (GLOBAL STATE) ---
+# Bu kısım, Tablet ve Telefonların birbiriyle haberleşmesini sağlar.
+# Flask'taki global değişkenlerin Streamlit karşılığıdır.
+@st.cache_resource
+class TokenManager:
+    def __init__(self):
+        self.active_gate_tokens = {}  # {token: expire_time}
+
+    def create_token(self, lifespan_seconds=15):
+        # Eski tokenları temizle
+        now = time.time()
+        self.active_gate_tokens = {k: v for k, v in self.active_gate_tokens.items() if v > now}
+        
+        # Yeni token oluştur
+        token = str(uuid.uuid4())
+        self.active_gate_tokens[token] = now + lifespan_seconds
+        return token
+
+    def is_valid(self, token):
+        # Token var mı ve süresi dolmamış mı?
+        now = time.time()
+        if token in self.active_gate_tokens:
+            if self.active_gate_tokens[token] > now:
+                return True
+        return False
+
+# Hafızayı başlat
+manager = TokenManager()
+
 # --- VERİTABANI İŞLEMLERİ ---
 def init_db():
     conn = sqlite3.connect('katilimcilar.db')
@@ -46,139 +75,137 @@ def get_data():
 # Veritabanını başlat
 init_db()
 
-# --- URL PARAMETRELERİNİ AL ---
-# Streamlit'in yeni versiyonunda query params alma yöntemi:
+# --- MOD SEÇİMİ ---
 query_params = st.query_params
-mod = query_params.get("mod", "admin") # Varsayılan mod: admin
+mod = query_params.get("mod", "admin")
 
-# --- 1. MOD: KAYIT FORMU (TELEFONDA GÖRÜNEN) ---
+# --- 1. MOD: KAYIT FORMU (TELEFON) ---
 if mod == "kayit":
     st.title("📝 Kayıt Formu")
     
-    with st.form("kayit_formu", clear_on_submit=True):
-        isim = st.text_input("İsim*")
-        soyisim = st.text_input("Soyisim*")
+    # URL'den gelen token'ı al
+    token = query_params.get("token", None)
+    
+    # Eğer kullanıcı daha önce onaylandıysa (session state) veya token geçerliyse
+    if st.session_state.get("form_unlocked", False) or (token and manager.is_valid(token)):
         
-        # Admin panelinden gelen ayarlara göre alanları göster/gizle
-        # (Not: Basitlik için burada URL parametresi ile de ayar taşınabilir ama
-        # şimdilik opsiyonel alanları her zaman gösterelim veya boş bırakılabilir yapalım)
-        telefon = st.text_input("Telefon Numarası (İsteğe Bağlı)")
-        mail = st.text_input("E-posta Adresi (İsteğe Bağlı)")
-        gonullu = st.radio("SİTODED Gönüllüsü müsünüz?", ["Evet", "Hayır"], index=1)
+        # Formu kilitle (Böylece QR değişse bile kullanıcı formda kalır)
+        st.session_state["form_unlocked"] = True
         
-        submitted = st.form_submit_button("Kaydı Tamamla")
-        
-        if submitted:
-            if isim and soyisim:
-                add_user(isim, soyisim, telefon, mail, gonullu)
-                st.success(f"Teşekkürler {isim}, kaydınız alındı! 🎉")
-                st.balloons()
-            else:
-                st.error("Lütfen İsim ve Soyisim alanlarını doldurun.")
+        with st.form("kayit_formu", clear_on_submit=True):
+            isim = st.text_input("İsim*")
+            soyisim = st.text_input("Soyisim*")
+            telefon = st.text_input("Telefon Numarası (İsteğe Bağlı)")
+            mail = st.text_input("E-posta Adresi (İsteğe Bağlı)")
+            gonullu = st.radio("SİTODED Gönüllüsü müsünüz?", ["Evet", "Hayır"], index=1)
+            
+            submitted = st.form_submit_button("Kaydı Tamamla")
+            
+            if submitted:
+                if isim and soyisim:
+                    add_user(isim, soyisim, telefon, mail, gonullu)
+                    st.success(f"Teşekkürler {isim}, kaydınız alındı! 🎉")
+                    st.balloons()
+                    # Kayıt bitince kilidi kaldırabiliriz veya bırakabiliriz
+                else:
+                    st.error("Lütfen İsim ve Soyisim alanlarını doldurun.")
+    else:
+        st.error("⚠️ Bu QR kodun süresi dolmuş veya geçersiz.")
+        st.info("Lütfen kapıdaki ekrandan güncel kodu tekrar okutun.")
 
-# --- 2. MOD: QR EKRANI (KAPIDAKİ TABLET) ---
+# --- 2. MOD: QR EKRANI (TABLET - OTOMATİK YENİLENEN) ---
 elif mod == "ekran":
-    # Yan menüyü ve gereksiz öğeleri gizle
+    # Ekran modunda sidebar'ı gizle
     st.markdown("""
         <style>
             [data-testid="stSidebar"] {display: none;}
-            #MainMenu {visibility: hidden;}
-            footer {visibility: hidden;}
-            .block-container {padding-top: 2rem;}
+            .block-container {padding-top: 1rem;}
         </style>
         """, unsafe_allow_html=True)
 
     st.header("Etkinliğimize Hoş Geldiniz! 👋")
-    st.write("Lütfen kayıt olmak için QR kodu okutun.")
     
-    # QR Kodun yönlendireceği adres
-    # Not: Buraya canlıya aldığınızda size verilen adresi yazmalısınız!
-    # Şimdilik URL'den base_url'i çekmeye çalışalım, olmazsa manuel girilir.
+    # URL'i al (Admin panelinden girilen veya otomatik)
+    base_url = query_params.get("url", "https://sitoded-qr.streamlit.app")
     
-    # Kullanıcıdan veya URL'den ana adresi al
-    base_url = query_params.get("url", "https://LUTFEN-ADMIN-PANELINDEN-LINKI-GUNCELLEYIN.com")
-    link = f"{base_url}/?mod=kayit"
+    # Yer tutucular (Placeholder): İçerikleri sonradan güncelleyeceğiz
+    qr_placeholder = st.empty()
+    status_text = st.empty()
+    progress_bar = st.progress(0)
     
-    # QR Kod Oluşturma
+    # 15 Saniyelik Döngü
+    LIFESPAN = 15
+    
+    # Token Oluştur
+    current_token = manager.create_token(LIFESPAN)
+    link = f"{base_url}/?mod=kayit&token={current_token}"
+    
+    # QR Kodu Oluştur
     qr = qrcode.QRCode(box_size=10, border=4)
     qr.add_data(link)
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
-    
-    # Görüntüyü Streamlit'e uygun hale getir
     buf = BytesIO()
     img.save(buf, format="PNG")
-    st.image(buf, width=350)
     
-    st.info("Formu doldurmak için kameranızı açın.")
+    # QR'ı Ekrana Bas
+    qr_placeholder.image(buf, width=400)
     
-    # Sayfayı periyodik olarak yenilemeye gerek yok çünkü link sabit.
-    # Ancak "Dinamik his" vermek veya bağlantıyı taze tutmak için:
-    time.sleep(1) # CPU yormamak için minik bekleme
+    # Geri sayım sayacı (Progress Bar)
+    for i in range(LIFESPAN):
+        # Kalan süreyi göster
+        kalan = LIFESPAN - i
+        status_text.caption(f"QR Kod **{kalan}** saniye sonra yenilenecek...")
+        progress_bar.progress((i + 1) / LIFESPAN)
+        time.sleep(1) # 1 saniye bekle
+        
+    # Süre dolunca sayfayı yenile (Rerun)
+    st.rerun()
 
-# --- 3. MOD: ADMİN PANELİ (SİZİN EKRANINIZ) ---
+# --- 3. MOD: ADMİN PANELİ ---
 else:
     st.title("Admin Paneli 🔒")
-    
     st.sidebar.header("⚙️ Ayarlar")
     
-    # Canlı URL Ayarı
-    deployed_url = st.sidebar.text_input(
-        "Canlı Site Linkiniz:", 
-        value="https://sitoded-qr.streamlit.app",
-        help="Render veya Streamlit Cloud'dan aldığınız linki buraya yapıştırın."
-    )
+    # Link Ayarı
+    if "base_link" not in st.session_state:
+        st.session_state["base_link"] = "https://sitoded-qr.streamlit.app"
+        
+    deployed_url = st.sidebar.text_input("Canlı Site Linkiniz:", value=st.session_state["base_link"])
+    st.session_state["base_link"] = deployed_url
     
     st.sidebar.divider()
     
-    st.sidebar.markdown("### 🔗 Hızlı Linkler")
-    st.sidebar.markdown(f"**Kapı Ekranı Linki:**\n`{deployed_url}/?mod=ekran&url={deployed_url}`")
+    # Hızlı Linkler
+    st.sidebar.markdown(f"**Kapı Ekranı Linki:**")
+    st.sidebar.code(f"{deployed_url}/?mod=ekran&url={deployed_url}")
     st.sidebar.link_button("Kapı Ekranını Aç 🖥️", f"{deployed_url}/?mod=ekran&url={deployed_url}")
-    
-    st.sidebar.markdown(f"**Kayıt Formu Linki:**\n`{deployed_url}/?mod=kayit`")
     
     st.divider()
     
-    # Verileri Göster
-    st.subheader("📊 Canlı Katılımcı Listesi")
-    
-    # Yenileme butonu
-    if st.button("Listeyi Yenile 🔄"):
+    # Tablo
+    st.subheader("📊 Canlı Liste")
+    if st.button("Yenile 🔄"):
         st.rerun()
         
     df = get_data()
-    
-    # İstatistikler
-    col1, col2 = st.columns(2)
-    col1.metric("Toplam Katılımcı", len(df))
-    col2.metric("Son Kayıt", df.iloc[0]['kayit_zamani'] if not df.empty else "-")
-    
-    # Tabloyu göster
+    st.metric("Toplam Katılımcı", len(df))
     st.dataframe(df, use_container_width=True)
     
-    # Excel İndirme Butonu
+    # Excel İndir
     if not df.empty:
-        # Excel dosyasını bellekte oluştur
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Katilimcilar')
-            
-        st.download_button(
-            label="📥 Listeyi Excel Olarak İndir",
-            data=output.getvalue(),
-            file_name=f"sitoded_katilimcilar_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    
-    # Veritabanı Temizleme (Tehlikeli Bölge)
-    with st.expander("⚠️ Tehlikeli Bölge (Sıfırlama)"):
-        st.write("Bu işlem tüm kayıtları siler. Geri alınamaz!")
-        if st.button("Tüm Veritabanını Sil"):
+            df.to_excel(writer, index=False)
+        st.download_button("📥 Excel İndir", data=output.getvalue(), file_name="sitoded_liste.xlsx")
+        
+    # Silme
+    with st.expander("⚠️ Veritabanını Sıfırla"):
+        if st.button("TÜMÜNÜ SİL"):
             conn = sqlite3.connect('katilimcilar.db')
-            c = conn.cursor()
-            c.execute("DELETE FROM katilimcilar")
+            conn.execute("DELETE FROM katilimcilar")
             conn.commit()
             conn.close()
-            st.warning("Veritabanı sıfırlandı!")
+            st.success("Silindi!")
             time.sleep(1)
             st.rerun()
