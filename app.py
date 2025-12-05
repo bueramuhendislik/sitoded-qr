@@ -27,7 +27,7 @@ class TokenManager:
         # --- KRİTİK AYAR ---
         # Ekranda 15 saniye görünse bile, aslında 120 Saniye (2 Dakika) geçerli olsun.
         # Bu, yavaş internette veya Streamlit yavaş açıldığında hatayı önler.
-        gercek_gecerlilik = lifespan_seconds + 120 
+        gercek_gecerlilik = lifespan_seconds + 30 
         
         self.active_gate_tokens[token] = now + gercek_gecerlilik
         return token
@@ -213,3 +213,4 @@ else:
             time.sleep(1)
 
             st.rerun()
+
