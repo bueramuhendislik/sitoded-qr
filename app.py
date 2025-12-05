@@ -125,7 +125,7 @@ else:
     # Canlı URL Ayarı
     deployed_url = st.sidebar.text_input(
         "Canlı Site Linkiniz:", 
-        value="https://sitoded-kayit.streamlit.app",
+        value="https://sitoded-qr.streamlit.app",
         help="Render veya Streamlit Cloud'dan aldığınız linki buraya yapıştırın."
     )
     
