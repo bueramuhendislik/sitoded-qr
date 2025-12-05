@@ -11,25 +11,28 @@ import uuid
 st.set_page_config(page_title="SİTODED QR Sistemi", page_icon="📝", layout="centered")
 
 # --- ORTAK HAFIZA (GLOBAL STATE) ---
-# Bu kısım, Tablet ve Telefonların birbiriyle haberleşmesini sağlar.
-# Flask'taki global değişkenlerin Streamlit karşılığıdır.
 @st.cache_resource
 class TokenManager:
     def __init__(self):
         self.active_gate_tokens = {}  # {token: expire_time}
 
-    def create_token(self, lifespan_seconds=20):
+    def create_token(self, lifespan_seconds=15):
         # Eski tokenları temizle
         now = time.time()
         self.active_gate_tokens = {k: v for k, v in self.active_gate_tokens.items() if v > now}
         
         # Yeni token oluştur
         token = str(uuid.uuid4())
-        self.active_gate_tokens[token] = now + lifespan_seconds
+        
+        # --- KRİTİK AYAR ---
+        # Ekranda 15 saniye görünse bile, aslında 120 Saniye (2 Dakika) geçerli olsun.
+        # Bu, yavaş internette veya Streamlit yavaş açıldığında hatayı önler.
+        gercek_gecerlilik = lifespan_seconds + 120 
+        
+        self.active_gate_tokens[token] = now + gercek_gecerlilik
         return token
 
     def is_valid(self, token):
-        # Token var mı ve süresi dolmamış mı?
         now = time.time()
         if token in self.active_gate_tokens:
             if self.active_gate_tokens[token] > now:
@@ -208,4 +211,5 @@ else:
             conn.close()
             st.success("Silindi!")
             time.sleep(1)
+
             st.rerun()
